@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="cs">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14201b">
+<title>Roznos letáků — Letňany</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --ink:      #14201b;
+    --ink-soft: #4a5a52;
+    --paper:    #faf9f5;
+    --line:     #d8d9d2;
+    --todo:      #9ca4a0;
+    --mine:      #fb4141;   /* my reservation - the one I have to act on */
+    --theirs:    #ffc145;   /* someone else holds it - do not walk this */
+    --done:      #5cb338;
+    --focus:     #00b7cd;
+    --danger:   #a63d2f;
+    --tap: 52px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 17px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--ink); background: var(--paper);
+    overscroll-behavior: none;
+  }
+  button { font: inherit; cursor: pointer; }
+  :focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+
+  /* ---------- name gate ---------- */
+  #gate {
+    position: fixed; inset: 0; z-index: 3000; background: var(--paper);
+    display: grid; place-items: center; padding: 24px;
+  }
+  #gate .box { width: min(380px, 100%); }
+  #gate h1 { font-size: 27px; line-height: 1.2; margin: 0 0 6px; font-weight: 650; }
+  #gate p { margin: 0 0 22px; color: var(--ink-soft); }
+  #gate input {
+    width: 100%; height: var(--tap); padding: 0 14px; font: inherit;
+    border: 2px solid var(--line); border-radius: 10px; background: #fff;
+  }
+  #gate input:focus { border-color: var(--ink); outline: none; }
+  #gate button {
+    width: 100%; height: var(--tap); margin-top: 12px; border: 0;
+    border-radius: 10px; background: var(--ink); color: var(--paper);
+    font-weight: 600;
+  }
+  #gate button:disabled { background: var(--line); color: var(--ink-soft); }
+
+  /* ---------- map ---------- */
+  #map { position: fixed; inset: 44px 0 0; background: #e9eae5; }
+  .leaflet-interactive:focus { outline: none; }
+  .leaflet-container { font: inherit; }
+
+  /* ---------- top strip ---------- */
+  #bar {
+    position: fixed; top: 0; left: 0; right: 0; height: 44px; z-index: 1200;
+    display: flex; align-items: center; gap: 10px; padding: 0 12px;
+    background: var(--ink); color: var(--paper);
+  }
+  #bar .who { font-weight: 600; }
+  #bar .progress { margin-left: auto; font-variant-numeric: tabular-nums; opacity: .85; }
+  #bar .rail { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; background: #2b3a33; }
+  #bar .rail i { display: block; height: 100%; background: var(--done); width: 0; transition: width .3s; }
+  #bar button {
+    background: none; border: 0; color: var(--paper); opacity: .8;
+    padding: 6px; font-size: 15px; text-decoration: underline;
+  }
+
+  /* ---------- selection sheet ---------- */
+  #sheet {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 1400;
+    background: var(--paper); border-top: 2px solid var(--ink);
+    padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
+    transform: translateY(110%); transition: transform .18s ease-out;
+    box-shadow: 0 -8px 24px rgba(20,32,27,.14);
+  }
+  #sheet.open { transform: none; }
+  @media (prefers-reduced-motion: reduce) { #sheet { transition: none; } }
+  #sheet h2 { margin: 0; font-size: 20px; font-weight: 650; line-height: 1.25; }
+  #sheet .meta { margin: 4px 0 0; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  #sheet .state { margin: 10px 0 0; font-weight: 600; }
+  #sheet .state.reserved { color: #8a6100; }
+  #sheet .state.done { color: var(--done); }
+  #actions { display: grid; gap: 8px; margin-top: 14px; }
+  #actions button {
+    height: var(--tap); border-radius: 10px; border: 2px solid var(--ink);
+    background: var(--ink); color: var(--paper); font-weight: 600;
+  }
+  #actions button.secondary { background: none; color: var(--ink); }
+  #actions button.warn { border-color: var(--danger); color: var(--danger); background: none; }
+  #close {
+    position: absolute; top: 8px; right: 8px; width: 40px; height: 40px;
+    border: 0; background: none; color: var(--ink-soft); font-size: 22px;
+  }
+
+  /* ---------- legend ---------- */
+  #legend {
+    position: fixed; right: 8px; top: 52px; z-index: 1100;
+    background: rgba(250,249,245,.95); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 9px; font-size: 13px; line-height: 1.3;
+    max-width: 46vw;
+  }
+  #legend div { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+  #legend i {
+    width: 13px; height: 13px; flex: none; border-radius: 3px;
+    border: 1px solid rgba(20,32,27,.35);
+  }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 96px; transform: translate(-50%, 20px);
+    z-index: 2000; background: var(--ink); color: var(--paper);
+    padding: 10px 16px; border-radius: 999px; opacity: 0;
+    transition: opacity .2s, transform .2s; pointer-events: none;
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  /* Dark ink clears 4.5:1 on every fill in this palette, so the checkmark
+     needs no badge - just a pale halo, since the fill is translucent and the
+     basemap underneath is not always light. */
+  .marker {
+    display: grid; place-items: center;
+    width: 22px; height: 22px;
+    color: #14201b; font-size: 19px; font-weight: 700; line-height: 1;
+    text-shadow: 0 0 3px #faf9f5, 0 0 6px rgba(250,249,245,.9);
+  }
+  #fatal { position: fixed; inset: 0; z-index: 4000; background: var(--paper);
+           padding: 32px; display: none; }
+  #fatal code { background: #eceee8; padding: 2px 5px; border-radius: 3px; }
+</style>
+
+<div id="gate">
+  <div class="box">
+    <h1>Roznos letáků v Letňanech</h1>
+    <p>Napiš svoje jméno. Ostatní uvidí, kdo si který úsek vzal.</p>
+    <input id="name-input" type="text" autocomplete="name" enterkeyhint="go"
+           placeholder="Např. Kuba N." aria-label="Tvoje jméno">
+    <button id="name-go" disabled>Začít</button>
+  </div>
+</div>
+
+<div id="bar" hidden>
+  <span class="who" id="who"></span>
+  <button id="change-name">změnit</button>
+  <span class="progress" id="progress"></span>
+  <span class="rail"><i id="rail-fill"></i></span>
+</div>
+
+<div id="map"></div>
+
+<div id="legend" hidden>
+  <div><i style="background:#9ca4a0"></i> Volné</div>
+  <div><i style="background:#fb4141"></i> Moje rezervace</div>
+  <div><i style="background:#ffc145"></i> Vzal si někdo jiný</div>
+  <div><i style="background:#5cb338"></i> Hotovo ✓</div>
+  <div><i style="background:#00b7cd"></i> Vybrané</div>
+</div>
+
+<div id="sheet" role="dialog" aria-live="polite">
+  <button id="close" aria-label="Zavřít">&times;</button>
+  <h2 id="s-label"></h2>
+  <p class="meta" id="s-meta"></p>
+  <p class="state" id="s-state"></p>
+  <div id="actions"></div>
+</div>
+
+<div id="toast"></div>
+<div id="fatal"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+// Leave API_BASE null and every phone keeps its own copy in this browser -
+// useful for trying the app out, useless for coordinating volunteers.
+// Point it at the API and the same four calls hit shared storage instead.
+const API_BASE = null;          // e.g. "/api"
+
+// Paste the config from Firebase console -> Project settings -> Your apps.
+// databaseURL is the one that matters. Leaving this null keeps everything in
+// this browser.
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyArklitjSek98CbsusLw3uuwM0RbSzwopU",
+  authDomain: "leaflets-distribution-poc-26q3.firebaseapp.com",
+  databaseURL: "https://leaflets-distribution-poc-26q3-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "leaflets-distribution-poc-26q3",
+  storageBucket: "leaflets-distribution-poc-26q3.firebasestorage.app",
+  messagingSenderId: "938342816840",
+  appId: "1:938342816840:web:18741e3740a5731e664c7d"
+};
+
+const POLL_MS  = 5000;
+const NAME_KEY = "letnany.volunteer";
+const STATE_KEY = "letnany.state";
+
+const STATES = { todo: "Volné", reserved: "Rezervováno", done: "Hotovo" };
+
+// ---------------------------------------------------------------------------
+// Storage: same interface either way, so the UI never knows which is in use
+// ---------------------------------------------------------------------------
+const LocalStore = {
+  shared: false,
+  async load() {
+    try { return JSON.parse(localStorage.getItem(STATE_KEY)) || {}; }
+    catch { return {}; }
+  },
+  async save(id, entry, all) {
+    all[id] = entry;
+    localStorage.setItem(STATE_KEY, JSON.stringify(all));
+    return entry;
+  }
+};
+
+const ApiStore = {
+  shared: true,
+  async load() {
+    const res = await fetch(`${API_BASE}/state`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`GET /state → ${res.status}`);
+    return res.json();
+  },
+  async save(id, entry) {
+    const res = await fetch(`${API_BASE}/district/${encodeURIComponent(id)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(entry)
+    });
+    if (res.status === 409) {
+      // someone claimed it between our read and our write
+      const current = await res.json();
+      throw Object.assign(new Error("taken"), { conflict: current });
+    }
+    if (!res.ok) throw new Error(`POST /district → ${res.status}`);
+    return res.json();
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Firebase: shared state with no backend of our own.
+// Writes are transactions, so two volunteers tapping the same free district at
+// the same moment cannot both win - the second one is told who got there.
+// ---------------------------------------------------------------------------
+const FirebaseStore = {
+  shared: true,
+  push: true,
+  ref: null,
+
+  async init(onChange) {
+    await loadScript("https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js");
+    await loadScript("https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js");
+    firebase.initializeApp(FIREBASE_CONFIG);
+    this.db = firebase.database();
+    this.ref = this.db.ref("districts");
+    this.ref.on("value", (snapshot) => onChange(snapshot.val() || {}));
+  },
+
+  async load() {
+    const snapshot = await this.ref.get();
+    return snapshot.val() || {};
+  },
+
+  async save(id, entry) {
+    const result = await this.ref.child(id).transaction((current) => {
+      // Claiming something already taken must lose. Finishing or releasing is
+      // always allowed - a volunteer who walked it gets the final word.
+      if (entry.s === "reserved" && current && current.s !== "todo") {
+        return undefined;          // abort
+      }
+      return entry;
+    });
+    if (!result.committed) {
+      throw Object.assign(new Error("taken"),
+                          { conflict: result.snapshot.val() });
+    }
+    // Append-only history: rules forbid editing or deleting these, so a bad
+    // afternoon can always be reconstructed.
+    this.db.ref("log").push({ id, ...entry }).catch(() => {});
+    return entry;
+  }
+};
+
+function loadScript(url) {
+  return new Promise((resolve, reject) => {
+    const tag = document.createElement("script");
+    tag.src = url;
+    tag.onload = resolve;
+    tag.onerror = () => reject(new Error(`nelze načíst ${url}`));
+    document.head.appendChild(tag);
+  });
+}
+
+const store = FIREBASE_CONFIG ? FirebaseStore : (API_BASE ? ApiStore : LocalStore);
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let volunteer = localStorage.getItem(NAME_KEY) || "";
+let state = {};                 // id -> { s, by, at }
+let districts = null;
+let layer = null, map = null;
+let selectedId = null, selectedLayer = null;
+let casing = null, tether = null;   // selection outline + link between patches
+const markers = new Map();
+
+const $ = (id) => document.getElementById(id);
+const entryOf = (id) => state[id] || { s: "todo" };
+const isMine = (entry) => entry.by && entry.by === volunteer;
+
+function fatal(title, body) {
+  const el = $("fatal");
+  el.innerHTML = `<h2>${title}</h2>${body}`;
+  el.style.display = "block";
+}
+
+function toast(message) {
+  const el = $("toast");
+  el.textContent = message;
+  el.classList.add("show");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => el.classList.remove("show"), 2200);
+}
+
+function ago(timestamp) {
+  if (!timestamp) return "";
+  const mins = Math.round((Date.now() - timestamp) / 60000);
+  if (mins < 1) return "právě teď";
+  if (mins < 60) return `před ${mins} min`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `před ${hours} h`;
+  return `před ${Math.round(hours / 24)} dny`;
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+const PALETTE = {
+  todo:   "#9ca4a0",
+  mine:   "#fb4141",
+  theirs: "#ffc145",
+  done:   "#5cb338",
+  focus:  "#00b7cd"
+};
+
+function colourOf(entry) {
+  if (entry.s === "done") return PALETTE.done;
+  if (entry.s === "reserved") return isMine(entry) ? PALETTE.mine : PALETTE.theirs;
+  return PALETTE.todo;
+}
+
+function styleFor(feature) {
+  const entry = entryOf(feature.properties.id);
+  const chosen = feature.properties.id === selectedId;
+  if (chosen) {
+    // The selected district turns blue outright, so its outline is obvious
+    // even where patches sit tight together. Its state is still on screen -
+    // the glyph stays, and the sheet spells it out in words.
+    return { color: "#0b7d8c", weight: 4, fillColor: PALETTE.focus,
+             fillOpacity: 0.65 };
+  }
+  return {
+    color: "#3d4744",
+    weight: entry.s === "reserved" && isMine(entry) ? 3 : 1.2,
+    fillColor: colourOf(entry),
+    fillOpacity: entry.s === "todo" ? 0.4 : 0.7
+  };
+}
+
+function partsOf(featureLayer) {
+  const geom = featureLayer.feature.geometry;
+  return geom.type === "MultiPolygon" ? geom.coordinates.length : 1;
+}
+
+function clearHighlight() {
+  if (casing) { map.removeLayer(casing); casing = null; }
+  if (tether) { map.removeLayer(tether); tether = null; }
+}
+
+function highlight(featureLayer) {
+  clearHighlight();
+
+  // A pale casing under the dark outline keeps the boundary readable over
+  // both roof tiles and grass.
+  casing = L.geoJSON(featureLayer.feature, {
+    interactive: false,
+    style: { color: "#faf9f5", weight: 10, opacity: 0.9, fill: false }
+  }).addTo(map);
+  featureLayer.bringToFront();
+
+  // A district can be several separate patches. Without a link between them
+  // you claim one courtyard and never notice the other two are yours.
+  const centres = [];
+  const geom = featureLayer.feature.geometry;
+  if (geom.type === "MultiPolygon" && geom.coordinates.length > 1) {
+    geom.coordinates.forEach((polygon) => {
+      const ring = polygon[0];
+      let x = 0, y = 0;
+      ring.forEach((point) => { x += point[0]; y += point[1]; });
+      centres.push([y / ring.length, x / ring.length]);
+    });
+    tether = L.polyline(centres, {
+      interactive: false, color: "#0b7d8c", weight: 3,
+      dashArray: "2 7", opacity: 0.9
+    }).addTo(map);
+  }
+
+  // Pan only when part of the district is off screen; otherwise leave the map
+  // where the person put it.
+  const bounds = featureLayer.getBounds();
+  if (!map.getBounds().contains(bounds)) {
+    map.fitBounds(bounds, { padding: [50, 130], maxZoom: map.getZoom() });
+  }
+}
+
+// State is also carried by a glyph, so the map still reads in sunlight and
+// for anyone who cannot separate the ochre from the green.
+function refreshMarker(feature, featureLayer) {
+  const id = feature.properties.id;
+  const entry = entryOf(id);
+  if (markers.has(id)) { map.removeLayer(markers.get(id)); markers.delete(id); }
+  // Only "done" gets a glyph. Grey and light green are near-identical in
+  // lightness, so the checkmark is what separates finished from untouched -
+  // and it separates done from my own red reservation for a colour-blind eye.
+  if (entry.s !== "done") return;
+
+  const glyph = "✓";
+  const marker = L.marker(featureLayer.getBounds().getCenter(), {
+    interactive: false,
+    icon: L.divIcon({ className: "marker", html: glyph,
+                      iconSize: [22, 22], iconAnchor: [11, 11] })
+  }).addTo(map);
+  markers.set(id, marker);
+}
+
+function redraw() {
+  if (!layer) return;
+  layer.eachLayer((featureLayer) => {
+    featureLayer.setStyle(styleFor(featureLayer.feature));
+    refreshMarker(featureLayer.feature, featureLayer);
+  });
+  if (selectedId) openSheet(selectedId, selectedLayer);
+  updateProgress();
+}
+
+function updateProgress() {
+  let total = 0, done = 0;
+  districts.features.forEach((f) => {
+    const boxes = f.properties.mailboxes || 0;
+    total += boxes;
+    if (entryOf(f.properties.id).s === "done") done += boxes;
+  });
+  const percent = total ? Math.round((done / total) * 100) : 0;
+  $("progress").textContent = `${done} / ${total} schránek`;
+  $("rail-fill").style.width = `${percent}%`;
+}
+
+// ---------------------------------------------------------------------------
+// Selection sheet
+// ---------------------------------------------------------------------------
+function openSheet(id, featureLayer) {
+  const props = featureLayer.feature.properties;
+  const entry = entryOf(id);
+  selectedId = id;
+  selectedLayer = featureLayer;
+
+  $("s-label").textContent = props.label || id;
+  const parts = partsOf(featureLayer);
+  $("s-meta").textContent =
+    `${props.mailboxes} schránek · ${props.buildings} domů`
+    + (parts > 1 ? ` · ${parts} oddělené části` : "")
+    + (props.placeholder ? ` · ${props.placeholder} bez obrysu` : "");
+
+  const stateEl = $("s-state");
+  stateEl.className = `state ${entry.s}`;
+  if (entry.s === "todo") {
+    stateEl.textContent = "Volné";
+  } else {
+    const verb = entry.s === "done" ? "Roznesl" : "Rezervoval";
+    stateEl.textContent = isMine(entry)
+      ? `${STATES[entry.s]} — ty, ${ago(entry.at)}`
+      : `${STATES[entry.s]} — ${verb} ${entry.by}, ${ago(entry.at)}`;
+  }
+
+  const actions = $("actions");
+  actions.innerHTML = "";
+  const add = (text, cls, handler) => {
+    const button = document.createElement("button");
+    button.textContent = text;
+    if (cls) button.className = cls;
+    button.onclick = handler;
+    actions.appendChild(button);
+  };
+
+  if (entry.s === "todo") {
+    add("Rezervovat pro sebe", "", () => apply(id, "reserved"));
+    add("Rovnou označit jako hotové", "secondary", () => apply(id, "done"));
+  } else if (entry.s === "reserved") {
+    add("Označit jako hotové", "", () => apply(id, "done"));
+    add(isMine(entry) ? "Uvolnit" : `Uvolnit (má ${entry.by})`,
+        "warn", () => apply(id, "todo"));
+  } else {
+    add("Vrátit mezi volné", "warn", () => apply(id, "todo"));
+  }
+
+  layer.eachLayer((l) => l.setStyle(styleFor(l.feature)));
+  highlight(featureLayer);
+  $("sheet").classList.add("open");
+}
+
+function closeSheet() {
+  $("sheet").classList.remove("open");
+  clearHighlight();
+  if (selectedId && layer) {
+    selectedId = selectedLayer = null;
+    layer.eachLayer((l) => l.setStyle(styleFor(l.feature)));
+  }
+}
+
+async function apply(id, nextState) {
+  const entry = nextState === "todo"
+    ? { s: "todo", by: "", at: Date.now() }
+    : { s: nextState, by: volunteer, at: Date.now() };
+
+  const previous = state[id];
+  state[id] = entry;                    // optimistic, so a tap feels instant
+  redraw();
+
+  try {
+    await store.save(id, entry, state);
+    toast(nextState === "reserved" ? "Rezervováno"
+        : nextState === "done" ? "Hotovo" : "Uvolněno");
+  } catch (error) {
+    if (error.conflict) {
+      state[id] = error.conflict;
+      toast(`Už si vzal ${error.conflict.by}`);
+    } else {
+      if (previous) state[id] = previous; else delete state[id];
+      toast("Nepodařilo se uložit");
+    }
+    redraw();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Start-up
+// ---------------------------------------------------------------------------
+function askName() {
+  const input = $("name-input");
+  const go = $("name-go");
+  input.value = volunteer;
+  go.disabled = input.value.trim().length < 2;
+  $("gate").style.display = "grid";
+  setTimeout(() => input.focus(), 50);
+
+  input.oninput = () => { go.disabled = input.value.trim().length < 2; };
+  input.onkeydown = (event) => { if (event.key === "Enter" && !go.disabled) go.click(); };
+  go.onclick = () => {
+    volunteer = input.value.trim();
+    localStorage.setItem(NAME_KEY, volunteer);
+    $("who").textContent = volunteer;
+    $("gate").style.display = "none";
+    $("bar").hidden = false;
+    $("legend").hidden = false;
+    redraw();
+  };
+}
+
+async function boot() {
+  let response;
+  try {
+    response = await fetch("clusters.geojson", { cache: "no-store" });
+    if (!response.ok) throw new Error(response.status);
+    districts = await response.json();
+  } catch (error) {
+    return fatal("Nepodařilo se načíst mapu úseků",
+      `<p>Soubor <code>clusters.geojson</code> musí ležet vedle této stránky
+       a stránka musí běžet přes http, ne přes <code>file://</code>.</p>
+       <p>Lokálně: <code>python3 -m http.server</code> ve složce
+       <code>out/</code>, pak otevři <code>http://localhost:8000/app.html</code>.</p>`);
+  }
+
+  map = L.map("map", { zoomControl: false });
+  L.control.zoom({ position: "bottomleft" }).addTo(map);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(map);
+
+  layer = L.geoJSON(districts, {
+    style: styleFor,
+    onEachFeature: (feature, featureLayer) => {
+      featureLayer.on("click", (event) => {
+        L.DomEvent.stop(event);
+        openSheet(feature.properties.id, featureLayer);
+      });
+    }
+  }).addTo(map);
+  map.fitBounds(layer.getBounds(), { padding: [20, 20] });
+  map.on("click", closeSheet);
+  $("close").onclick = closeSheet;
+  $("change-name").onclick = askName;
+
+  try {
+    if (store.init) {
+      // Push updates: no polling, and another volunteer's tap lands here in
+      // well under a second.
+      await store.init((incoming) => { state = incoming; redraw(); });
+    }
+    state = await store.load();
+  } catch (error) {
+    state = {};
+    toast("Sdílený stav se nenačetl, jedeš lokálně");
+  }
+
+  if (volunteer) {
+    $("who").textContent = volunteer;
+    $("bar").hidden = false;
+    $("legend").hidden = false;
+    $("gate").style.display = "none";
+  } else {
+    askName();
+  }
+  redraw();
+
+  if (store.shared && !store.push) {
+    setInterval(async () => {
+      try { state = await store.load(); redraw(); } catch { /* keep going */ }
+    }, POLL_MS);
+  }
+}
+
+boot();
+</script>
+</html>
