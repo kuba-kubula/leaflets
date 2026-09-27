@@ -13,12 +13,19 @@
     --paper:    #faf9f5;
     --line:     #d8d9d2;
     --todo:      #9ca4a0;
-    --mine:      #fb4141;   /* my reservation - the one I have to act on */
-    --theirs:    #ffc145;   /* someone else holds it - do not walk this */
-    --done:      #5cb338;
+    --mine:      #E8140A;   /* my reservation - the one I have to act on */
+    --theirs:    #FFE116;   /* someone else holds it - do not walk this */
+    --done:      #428A24;
+    --halfdone:  #8FCB6B;   /* partly walked - not free, not finished */
+    --impossible: #a63d2f;  /* can't be delivered - counts as undelivered same as todo */
     --focus:     #00b7cd;
     --danger:   #a63d2f;
     --tap: 52px;
+    /* Text-on-paper variants: same hue, darkened enough for 4.5:1 contrast on
+       --paper. Needed drop differs a lot by how light the base color is. */
+    --done-ink:       hsl(from var(--done) h s calc(l - 2));
+    --halfdone-ink:   hsl(from var(--halfdone) h s calc(l - 28));
+    --impossible-ink: hsl(from var(--impossible) h s l);
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { height: 100%; margin: 0; }
@@ -63,8 +70,10 @@
   }
   #bar .who { font-weight: 600; }
   #bar .progress { margin-left: auto; font-variant-numeric: tabular-nums; opacity: .85; }
-  #bar .rail { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; background: #2b3a33; }
-  #bar .rail i { display: block; height: 100%; background: var(--done); width: 0; transition: width .3s; }
+  #bar .rail { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; background: #2b3a33; display: flex; }
+  #bar .rail i { display: block; height: 100%; width: 0; transition: width .3s; }
+  #bar .rail #rail-fill { background: var(--done); }
+  #bar .rail #rail-notok { background: var(--impossible); }
   #bar button {
     background: none; border: 0; color: var(--paper); opacity: .8;
     padding: 6px; font-size: 15px; text-decoration: underline;
@@ -84,7 +93,9 @@
   #sheet .meta { margin: 4px 0 0; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
   #sheet .state { margin: 10px 0 0; font-weight: 600; }
   #sheet .state.reserved { color: #8a6100; }
-  #sheet .state.done { color: var(--done); }
+  #sheet .state.done { color: var(--done-ink); }
+  #sheet .state.halfdone { color: var(--halfdone-ink); }
+  #sheet .state.impossible { color: var(--impossible-ink); }
   #actions { display: grid; gap: 8px; margin-top: 14px; }
   #actions button {
     height: var(--tap); border-radius: 10px; border: 2px solid var(--ink);
@@ -92,6 +103,12 @@
   }
   #actions button.secondary { background: none; color: var(--ink); }
   #actions button.warn { border-color: var(--danger); color: var(--danger); background: none; }
+  #status-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  #status-row button { padding: 0 4px; font-size: 15px; color: #000; }
+  #status-row button.impossible { border-color: var(--impossible); background: var(--impossible); color: var(--paper); }
+  #status-row button.halfdone { border-color: var(--halfdone); background: var(--halfdone); }
+  #status-row button.done { border-color: var(--done); background: var(--done); color: var(--paper); }
+  #status-row button.active { text-decoration: underline; box-shadow: inset 0 0 0 3px var(--ink); }
   #close {
     position: absolute; top: 8px; right: 8px; width: 40px; height: 40px;
     border: 0; background: none; color: var(--ink-soft); font-size: 22px;
@@ -109,6 +126,13 @@
     width: 13px; height: 13px; flex: none; border-radius: 3px;
     border: 1px solid rgba(20,32,27,.35);
   }
+  #legend i.todo { background: var(--todo); }
+  #legend i.mine { background: var(--mine); }
+  #legend i.theirs { background: var(--theirs); }
+  #legend i.done { background: var(--done); }
+  #legend i.halfdone { background: var(--halfdone); }
+  #legend i.impossible { background: var(--impossible); }
+  #legend i.focus { background: var(--focus); }
 
   #toast {
     position: fixed; left: 50%; bottom: 96px; transform: translate(-50%, 20px);
@@ -146,17 +170,19 @@
   <span class="who" id="who"></span>
   <button id="change-name">změnit</button>
   <span class="progress" id="progress"></span>
-  <span class="rail"><i id="rail-fill"></i></span>
+  <span class="rail"><i id="rail-fill"></i><i id="rail-notok"></i></span>
 </div>
 
 <div id="map"></div>
 
 <div id="legend" hidden>
-  <div><i style="background:#9ca4a0"></i> Volné</div>
-  <div><i style="background:#fb4141"></i> Moje rezervace</div>
-  <div><i style="background:#ffc145"></i> Vzal si někdo jiný</div>
-  <div><i style="background:#5cb338"></i> Hotovo ✓</div>
-  <div><i style="background:#00b7cd"></i> Vybrané</div>
+  <div><i class="todo"></i> Volné</div>
+  <div><i class="mine"></i> Moje rezervace</div>
+  <div><i class="theirs"></i> Vzal si někdo jiný</div>
+  <div><i class="done"></i> Hotovo ✓</div>
+  <div><i class="halfdone"></i> Napůl hotovo ½</div>
+  <div><i class="impossible"></i> Nedoručitelné ✕</div>
+  <div><i class="focus"></i> Vybrané</div>
 </div>
 
 <div id="sheet" role="dialog" aria-live="polite">
@@ -197,7 +223,8 @@ const POLL_MS  = 5000;
 const NAME_KEY = "letnany.volunteer";
 const STATE_KEY = "letnany.state";
 
-const STATES = { todo: "Volné", reserved: "Rezervováno", done: "Hotovo" };
+const STATES = { todo: "Volné", reserved: "Rezervováno", done: "Hotovo",
+                 halfdone: "Napůl hotovo", impossible: "Nedoručitelné" };
 
 // ---------------------------------------------------------------------------
 // Storage: same interface either way, so the UI never knows which is in use
@@ -337,15 +364,19 @@ function ago(timestamp) {
 // Rendering
 // ---------------------------------------------------------------------------
 const PALETTE = {
-  todo:   "#9ca4a0",
-  mine:   "#fb4141",
-  theirs: "#ffc145",
-  done:   "#5cb338",
-  focus:  "#00b7cd"
+  todo:       "#9ca4a0",
+  mine:       "#E8140A",
+  theirs:     "#FFE116",
+  done:       "#428A24",
+  halfdone:   "#8FCB6B",
+  impossible: "#a63d2f",
+  focus:      "#00b7cd"
 };
 
 function colourOf(entry) {
   if (entry.s === "done") return PALETTE.done;
+  if (entry.s === "halfdone") return PALETTE.halfdone;
+  if (entry.s === "impossible") return PALETTE.impossible;
   if (entry.s === "reserved") return isMine(entry) ? PALETTE.mine : PALETTE.theirs;
   return PALETTE.todo;
 }
@@ -420,12 +451,13 @@ function refreshMarker(feature, featureLayer) {
   const id = feature.properties.id;
   const entry = entryOf(id);
   if (markers.has(id)) { map.removeLayer(markers.get(id)); markers.delete(id); }
-  // Only "done" gets a glyph. Grey and light green are near-identical in
-  // lightness, so the checkmark is what separates finished from untouched -
-  // and it separates done from my own red reservation for a colour-blind eye.
-  if (entry.s !== "done") return;
+  // Only finished/partial/blocked states get a glyph. Grey and light green are
+  // near-identical in lightness, so the glyph is what separates them - and it
+  // separates done from my own red reservation for a colour-blind eye.
+  const glyphs = { done: "✓", halfdone: "½", impossible: "✕" };
+  if (!glyphs[entry.s]) return;
 
-  const glyph = "✓";
+  const glyph = glyphs[entry.s];
   const marker = L.marker(featureLayer.getBounds().getCenter(), {
     interactive: false,
     icon: L.divIcon({ className: "marker", html: glyph,
@@ -444,16 +476,29 @@ function redraw() {
   updateProgress();
 }
 
+// Fraction of a district's postboxes that count as "finished ok": full for
+// done, half for halfdone (the other half is "finished not ok"). todo and
+// reserved contribute nothing here - they land in "planned" instead.
+const OK_FRACTION = { done: 1, halfdone: 0.5 };
+
 function updateProgress() {
-  let total = 0, done = 0;
+  let total = 0, planned = 0, ok = 0, notOk = 0;
   districts.features.forEach((f) => {
     const boxes = f.properties.mailboxes || 0;
+    const s = entryOf(f.properties.id).s;
     total += boxes;
-    if (entryOf(f.properties.id).s === "done") done += boxes;
+    if (s === "todo" || s === "reserved") { planned += boxes; return; }
+    // Round only the "ok" share; "not ok" is the remainder, so a halfdone
+    // district's boxes always split into whole numbers that sum back to it.
+    const okShare = Math.round(boxes * (OK_FRACTION[s] ?? 0));
+    ok += okShare;
+    notOk += boxes - okShare;
   });
-  const percent = total ? Math.round((done / total) * 100) : 0;
-  $("progress").textContent = `${done} / ${total} schránek`;
+  const percent = total ? Math.round((ok / total) * 100) : 0;
+  const notOkPercent = total ? Math.round((notOk / total) * 100) : 0;
+  $("progress").textContent = `${planned} zbývá, ${ok} hotovo, ${notOk} nelze`;
   $("rail-fill").style.width = `${percent}%`;
+  $("rail-notok").style.width = `${notOkPercent}%`;
 }
 
 // ---------------------------------------------------------------------------
@@ -477,7 +522,8 @@ function openSheet(id, featureLayer) {
   if (entry.s === "todo") {
     stateEl.textContent = "Volné";
   } else {
-    const verb = entry.s === "done" ? "Roznesl" : "Rezervoval";
+    const verbs = { done: "Roznesl", halfdone: "Rozpůlil", impossible: "Označil jako nedoručitelné" };
+    const verb = verbs[entry.s] || "Rezervoval";
     stateEl.textContent = isMine(entry)
       ? `${STATES[entry.s]} — ty, ${ago(entry.at)}`
       : `${STATES[entry.s]} — ${verb} ${entry.by}, ${ago(entry.at)}`;
@@ -491,13 +537,28 @@ function openSheet(id, featureLayer) {
     if (cls) button.className = cls;
     button.onclick = handler;
     actions.appendChild(button);
+    return button;
   };
+
+  // Three-way status row: 0 % / 50 % / 100 % of the district's postboxes.
+  // Reachable from any state; each button carries its own state class so CSS
+  // can colour and size it without a separate "active" flag.
+  const statusRow = document.createElement("div");
+  statusRow.id = "status-row";
+  [["impossible", "Nedoručitelné"], ["halfdone", "Napůl hotovo"], ["done", "Hotovo"]]
+    .forEach(([s, text]) => {
+      const button = document.createElement("button");
+      button.textContent = text;
+      button.className = s + (entry.s === s ? " active" : "");
+      button.disabled = entry.s === s;
+      button.onclick = () => apply(id, s);
+      statusRow.appendChild(button);
+    });
+  actions.appendChild(statusRow);
 
   if (entry.s === "todo") {
     add("Rezervovat pro sebe", "", () => apply(id, "reserved"));
-    add("Rovnou označit jako hotové", "secondary", () => apply(id, "done"));
   } else if (entry.s === "reserved") {
-    add("Označit jako hotové", "", () => apply(id, "done"));
     add(isMine(entry) ? "Uvolnit" : `Uvolnit (má ${entry.by})`,
         "warn", () => apply(id, "todo"));
   } else {
